@@ -1,10 +1,13 @@
 {
   "name": "belex-data-emailer",
   "version": "0.4.2",
+  "type": "module",
   "main": "server.merged.js",
   "scripts": {
-    "start": "node server.merged.js",
-    "type": "module"
+    "start": "npm-run-all --parallel watcher pdf",
+    "type": "module",
+    "watcher": "node server.merged.js",
+    "pdf": "node pdfAlertTracker.js"
   },
   "dependencies": {
     "cheerio": "^1.1.2",
@@ -12,6 +15,7 @@
     "imap-simple": "^5.0.0",
     "node-fetch": "^2.7.0",
     "nodemailer": "^6.10.1",
+    "npm-run-all": "^4.1.5",
     "pdf-parse": "^2.4.3",
     "puppeteer": "^21.0.0"
   },
