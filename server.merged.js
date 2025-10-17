@@ -2,6 +2,16 @@
 // Merged server that uses Functions.improved.js (Functions folder)
 // This variant ensures we use the PRICE_SELECTOR from .env (exact field) and robustly loads/saves prices.json
 
+// SERVER: globalni safety handlers (sprečava crash zbog neuhvaćenih grešaka)
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (will log, consider restart):', err && err.stack || err);
+  // Ne radimo process.exit ovde automatski - loguj i prepusti process manageru da restartuje ako treba.
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled rejection at:', promise, 'reason:', reason);
+});
+
 require('dotenv').config();
 const path = require('path');
 const F = require('./Functions/functions.improved.js');

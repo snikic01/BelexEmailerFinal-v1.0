@@ -427,6 +427,7 @@ async function checkTickersAndAlert(tickers, pricesState = {}, opts = {}) {
 }
 
 // --- IMAP listener (polling) ---
+// --- IMAP listener (polling) --- (REPLACE existing startImapPolling with this version)
 async function startImapPolling(onMailCallback, opts = {}) {
   const imapConfig = {
     imap: {
@@ -435,7 +436,7 @@ async function startImapPolling(onMailCallback, opts = {}) {
       host: opts.IMAP_HOST || process.env.IMAP_HOST,
       port: parseInt(opts.IMAP_PORT || process.env.IMAP_PORT || '993', 10),
       tls: (process.env.IMAP_TLS || 'true').toLowerCase() !== 'false',
-      authTimeout: 3000,
+      authTimeout: 30000,
     },
   };
 
@@ -444,38 +445,151 @@ async function startImapPolling(onMailCallback, opts = {}) {
   }
 
   const pollMs = parseInt(opts.IMAP_POLL_MS || process.env.IMAP_POLL_MS || '30000', 10);
-  try {
-    const connection = await imaps.connect(imapConfig);
-    await connection.openBox('INBOX');
 
-    const pollFn = async () => {
+  let stopped = false;
+  let connection = null;
+  let pollInterval = null;
+  let reconnectTimer = null;
+  let reconnectAttempts = 0;
+  const MAX_RECONNECT = 10;
+
+  function clearPoll() {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  }
+
+  async function safeEndConnection() {
+    try {
+      if (connection) {
+        try { await connection.end(); } catch (e) { /* ignore */ }
+      }
+    } catch (e) {
+      // ignore
+    } finally {
+      connection = null;
+    }
+  }
+
+  function scheduleReconnect() {
+    if (stopped) return;
+    clearPoll();
+    // try to close if open
+    safeEndConnection().catch(() => { /* ignore */ });
+
+    reconnectAttempts++;
+    let delay;
+    if (reconnectAttempts > MAX_RECONNECT) {
+      delay = 60000; // cooldown
+      reconnectAttempts = 0;
+    } else {
+      delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttempts)); // 1s,2s,4s... cap 30s
+    }
+
+    console.warn(`IMAP: scheduling reconnect in ${delay}ms (attempt ${reconnectAttempts})`);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect().catch(err => console.error('IMAP reconnect failed:', err && err.message || err));
+    }, delay);
+  }
+
+  async function connect() {
+    if (stopped) return;
+    try {
+      connection = await imaps.connect(imapConfig);
+      reconnectAttempts = 0;
+      console.log('IMAP connected');
+
+      // prevent uncaught errors from killing the process
+      connection.on('error', (err) => {
+        console.error('IMAP connection error:', err && err.message || err);
+        scheduleReconnect();
+      });
+
+      connection.on('close', () => {
+        console.warn('IMAP connection closed by server');
+        scheduleReconnect();
+      });
+
+      connection.on('end', () => {
+        console.warn('IMAP connection ended by server');
+        scheduleReconnect();
+      });
+
+      // try attach to underlying socket errors (defensive - may not exist in all versions)
       try {
-        const searchCriteria = ['UNSEEN'];
-        const fetchOptions = { bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)'], markSeen: true };
-        const results = await connection.search(searchCriteria, fetchOptions);
-        for (const res of results) {
-          const header = res.parts && res.parts[0] && res.parts[0].body;
-          const subjectRaw = (header && header.subject && header.subject[0]) || '';
-          const fromRaw = (header && header.from && header.from[0]) || '';
-          const m = fromRaw.match(/<([^>]+)>/);
-          const fromEmail = m ? m[1] : fromRaw;
-          await onMailCallback({ subject: subjectRaw, from: fromEmail, raw: header });
+        if (connection.imap && connection.imap._sock && connection.imap._sock.on) {
+          connection.imap._sock.on('error', (err) => {
+            console.error('IMAP socket error:', err && err.message || err);
+            scheduleReconnect();
+          });
         }
       } catch (e) {
-        console.error('IMAP poll error', e.message || e);
+        // ignore if internals are different
       }
-    };
 
-    const interval = setInterval(pollFn, pollMs);
-    return async function stop() {
-      clearInterval(interval);
-      try { await connection.end(); } catch (e) {}
-    };
-  } catch (e) {
-    console.error('Failed to connect to IMAP', e.message || e);
-    throw e;
+      // open INBOX
+      await connection.openBox('INBOX');
+
+      // start polling loop
+      if (pollInterval) clearInterval(pollInterval);
+      pollInterval = setInterval(async () => {
+        if (stopped) return clearPoll();
+        // guard: ensure connection seems authenticated
+        const imapState = (connection && connection.imap && connection.imap.state) || connection && connection.state;
+        if (!connection || (imapState && imapState !== 'authenticated')) {
+          // skip this tick; schedule reconnect if socket clearly closed
+          return;
+        }
+        try {
+          const searchCriteria = ['UNSEEN'];
+          const fetchOptions = { bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)'], markSeen: true };
+          const results = await connection.search(searchCriteria, fetchOptions);
+          for (const res of results) {
+            const header = res.parts && res.parts[0] && res.parts[0].body;
+            const subjectRaw = (header && header.subject && header.subject[0]) || '';
+            const fromRaw = (header && header.from && header.from[0]) || '';
+            const m = fromRaw.match(/<([^>]+)>/);
+            const fromEmail = m ? m[1] : fromRaw;
+            // call callback but do not await it here to avoid blocking other mail processing
+            try {
+              await onMailCallback({ subject: subjectRaw, from: fromEmail, raw: header });
+            } catch (cbErr) {
+              console.error('onMailCallback error:', cbErr && cbErr.message || cbErr);
+            }
+          }
+        } catch (e) {
+          console.error('IMAP poll error:', e && e.message || e);
+          // attempt reconnect if search failed (server might have closed socket)
+          scheduleReconnect();
+        }
+      }, pollMs);
+
+      // connected & polling; return
+      return;
+    } catch (e) {
+      console.error('IMAP connect failed:', e && e.message || e);
+      scheduleReconnect();
+    }
   }
+
+  // start initial connect attempt
+  connect().catch(err => console.error('IMAP initial connect error:', err && err.message || err));
+
+  // return stop function
+  return async function stop() {
+    stopped = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    clearPoll();
+    await safeEndConnection();
+  };
 }
+
 
 // --- scheduler helper ---
 function startPeriodicTask(taskFn, seconds = DEFAULTS.CHECK_INTERVAL_SECONDS) {
