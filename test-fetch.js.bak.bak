@@ -1,6 +1,6 @@
 // test-fetch.js
 require('dotenv').config();
-const F = require('./Functions/functions.improved.cjs');
+const F = require('./Functions/functions.improved.js');
 
 (async () => {
   try {

@@ -14,7 +14,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 require('dotenv').config();
 const path = require('path');
-const F = require('./Functions/functions.improved.cjs');
+const F = require('./Functions/functions.improved.js');
 
 const PRICES_FILE = process.env.PRICES_FILE || 'prices.json';
 
