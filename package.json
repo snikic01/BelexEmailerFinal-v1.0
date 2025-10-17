@@ -6,7 +6,7 @@
   "scripts": {
     "start": "npm-run-all --parallel watcher pdf",
     "type": "module",
-    "watcher": "node server.merged.js",
+    "watcher": "node server.merged.cjs",
     "pdf": "node pdfAlertTracker.js"
   },
   "dependencies": {
