@@ -3,13 +3,17 @@
   "version": "0.4.2",
   "main": "server.merged.js",
   "scripts": {
-    "start": "node server.merged.js"
+    "start": "node server.merged.js",
+    "type": "module"
   },
   "dependencies": {
-    "puppeteer": "^21.0.0",
-    "nodemailer": "^6.9.1",
+    "cheerio": "^1.1.2",
+    "dotenv": "^16.6.1",
     "imap-simple": "^5.0.0",
-    "dotenv": "^16.0.0"
+    "node-fetch": "^2.7.0",
+    "nodemailer": "^6.10.1",
+    "pdf-parse": "^2.4.3",
+    "puppeteer": "^21.0.0"
   },
   "engines": {
     "node": ">=18"
